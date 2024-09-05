@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const bookCollection = require("./bookCollection.js");
+const bcrypt = require('bcrypt');
+const bookCollection = require("./booksdb.js");
 const userRouter = express.Router();
 
 let registeredUsers = [];
@@ -8,7 +9,8 @@ let registeredUsers = [];
 const doesUserExist = (username) => registeredUsers.some(user => user.username === username);
 
 const verifyUserCredentials = (username, password) => {
-    return registeredUsers.some(user => user.username === username && user.password === password);
+    const user = registeredUsers.find(user => user.username === username);
+    return user && bcrypt.compareSync(password, user.password);
 }
 
 userRouter.post("/signup", (req, res) => {
@@ -22,7 +24,8 @@ userRouter.post("/signup", (req, res) => {
         return res.status(400).json({ message: "User already registered." });
     }
 
-    registeredUsers.push({ username, password });
+    const hashedPassword = bcrypt.hashSync(password, 10);
+    registeredUsers.push({ username, password: hashedPassword });
     return res.status(201).json({ message: "Registration successful." });
 });
 
@@ -34,13 +37,17 @@ userRouter.post("/signin", (req, res) => {
     }
 
     const token = jwt.sign({ data: username }, process.env.JWT_SECRET || 'secretKey', { expiresIn: '1h' });
-    req.session.authorization = { token };
-    req.session.username = username; // Add username to session for future use
-    return res.status(200).json({ message: "Login successful.", token });
+    res.cookie('accessToken', token, {
+        httpOnly: true, 
+        secure: process.env.NODE_ENV === 'production', 
+        sameSite: 'Strict'
+    });
+    req.session.username = username; 
+    return res.status(200).json({ message: "Login successful." });
 });
 
 const authenticateUser = (req, res, next) => {
-    const token = req.session.authorization?.token;
+    const token = req.cookies.accessToken || req.session.authorization?.token;
 
     if (!token) {
         return res.status(403).json({ message: "Unauthorized access." });
@@ -50,7 +57,8 @@ const authenticateUser = (req, res, next) => {
         if (err) {
             return res.status(403).json({ message: "Invalid token." });
         }
-        req.session.username = decoded.data; // Attach the username to the session
+        req.session.username = decoded.data; 
+        req.user = decoded.data; // Optionally attach user data
         next();
     });
 };
